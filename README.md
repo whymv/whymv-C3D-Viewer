@@ -3,7 +3,7 @@
 > **A browser-based 3D motion capture viewer to inspect, label, and analyze `.c3d` files directly in your web browser—no installation required.**
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/whymv/whmv-C3D-Viewer/main/img/example_gait.gif" width="720" alt="C3D Viewer Gait Demo" />
+  <img src="https://raw.githubusercontent.com/whymv/whmv-C3D-Viewer/main/img/example_gait.gif" width="420" alt="C3D Viewer Gait Demo" />
 </p>
 
 <p align="center">
@@ -53,9 +53,9 @@ Connect markers into skeletons and calculate key biomechanical metrics.
   <img src="https://raw.githubusercontent.com/whymv/whmv-C3D-Viewer/main/img/03_link.png" width="700" alt="Segment Linking and Skeleton" />
 </p>
 
-- **Auto-link**: Apply skeleton templates (Plug-in Gait, Cortex, OpenSim).
-- **Joint Centers & COM**: Automatic detection of joint centers (Knee, Ankle, Hip) and whole-body Center of Mass (COM).
-- **GRF & EMG**: Ground Reaction Force (GRF) vectors and raw / RMS EMG signal visualization.
+- **Auto-link**: Apply skeleton templates (e.g., Plug-in Gait).
+- **Joint Centers & COM**: Automatic detection of joint centers (Knee, Ankle, Hip) and whole-body Center of Mass (CoM).
+- **GRF & EMG**: Ground Reaction Force (GRF) vectors and raw / RMS EMG visualization.
 
 ---
 
