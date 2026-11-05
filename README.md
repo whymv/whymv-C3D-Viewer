@@ -3,7 +3,7 @@
 > **A browser-based 3D motion capture viewer to inspect, label, and analyze `.c3d` files directly in your web browser—no installation required.**
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/whymv/whymv-C3D-Viewer/main/img/example_gait.gif" width="720" alt="C3D Viewer Gait Demo" />
+  <img src="https://raw.githubusercontent.com/whymv/whymv-C3D-Viewer/main/img/example_gait.gif" width="400" alt="C3D Viewer Gait Demo" />
 </p>
 
 <p align="center">
