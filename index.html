@@ -11,7 +11,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..125,400..800&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;600&display=swap">
 <style>
-/* Layout: label list + controls (narrow left) · remaining width split 50/50 — 3D view with transport | stacked signal graphs */
+/* Layout: label list + controls (narrow left) · remaining width split 50/50 — 3D view with transport | signal graphs */
 :root {
   color-scheme: dark;
   --bg: #0b0e13;
@@ -22,13 +22,15 @@
   --ink: #e9ecef;
   --ink-2: #a4adba;
   --ink-3: #687284;
-  /* fixed segment palette (user spec) */
+
+  /* fixed segment palette */
   --trunk: #E9ECEF;
   --right: #38B6FF;
   --left:  #FF6B6B;
   --other: #7d8799;
   --none:  #4a5262;
   --grf:   #ffc53d;
+
   /* signal types in the graph panel */
   --emg:   #b49cff;
   --acc:   #5fd4b4;
@@ -120,6 +122,7 @@ header { grid-area: head; display: flex; align-items: center; gap: 14px; flex-wr
 .tog::before { content: ""; width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid currentColor; flex: none; }
 .tog[aria-pressed="true"] { color: var(--ink); background: var(--raise); }
 .tog[aria-pressed="true"]::before { background: var(--c, var(--ink)); border-color: var(--c, var(--ink)); }
+.tog[data-level="2"]::before { box-shadow: 0 0 0 2px var(--raise), 0 0 0 3.2px var(--c, var(--ink)); }   /* 2nd click state (Butterfly + tip line) */
 .sl { display: grid; grid-template-columns: 62px 1fr 58px; gap: 6px; align-items: center; font-size: 11.5px; color: var(--ink-2); }
 .sl output { font-family: var(--f-mono); font-size: 10.5px; color: var(--ink-3); text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 input[type=range] { width: 100%; accent-color: var(--ink-2); margin: 0; }
@@ -199,6 +202,8 @@ input[type=range] { width: 100%; accent-color: var(--ink-2); margin: 0; }
 .chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chip button { border: 0; background: transparent; color: var(--ink-3); cursor: pointer; padding: 0 4px; font-size: 13px; line-height: 1; }
 .chip button:hover { color: var(--ink); }
+.chip { cursor: pointer; }
+.chip.on { color: var(--ink); border-color: var(--g); background: color-mix(in srgb, var(--g) 16%, var(--raise)); }
 .namer { position: absolute; inset: 0; background: var(--panel); z-index: 12; display: flex; flex-direction: column; border-radius: var(--r); }
 .namer .nh { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
 .namer .nh .sp { flex: 1; }
@@ -352,19 +357,13 @@ input[type=range] { width: 100%; accent-color: var(--ink-2); margin: 0; }
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 <script>
-/* Minimal C3D reader (Intel / DEC / MIPS; int16 or float32 storage)
- * parseC3D(ArrayBuffer) -> {
- *   pointRate, frames, labels[], units, pos: Float32Array(frames*nPts*3) in metres (NaN = missing),
- *   analogRate, analogLabels[], analogUnits[], analog: Float32Array[] per channel (scaled),
- *   plates: [{type, corners[4][3] (m), F: Float32Array(nA*3) N global, COP: Float32Array(nA*3) m global}],
- *   upAxis: 'X'|'Y'|'Z', params }
- */
+
 function parseC3D(buf) {
   const dv = new DataView(buf);
   const u8 = new Uint8Array(buf);
   const paramBlock = u8[0];
   const pStart = (paramBlock - 1) * 512;
-  // reject non-C3D input early (header word 1 byte 2 is always 0x50; processor type 84–86)
+
   if (buf.byteLength < 1024 || u8[1] !== 0x50 || paramBlock < 2 || pStart + 4 > buf.byteLength || u8[pStart + 3] < 84 || u8[pStart + 3] > 86) throw new Error('Not a C3D file');
   const proc = u8[pStart + 3] - 83; // 1 Intel, 2 DEC, 3 MIPS
   const LE = proc !== 3;
@@ -373,13 +372,13 @@ function parseC3D(buf) {
   const i16 = o => dv.getInt16(o, LE);
   const ui16 = o => dv.getUint16(o, LE);
   const f32 = proc === 2
-    ? o => { // DEC VAX F-float -> IEEE
+    ? o => { 
         const w1 = dv.getUint16(o, true), w2 = dv.getUint16(o + 2, true);
         const t = new DataView(new ArrayBuffer(4)); t.setUint16(0, w2, true); t.setUint16(2, w1, true);
         return t.getFloat32(0, true) / 4;
       }
     : o => dv.getFloat32(o, LE);
-  const str = (o, n) => { let s = ''; for (let i = 0; i < n; i++) s += String.fromCharCode(u8[o + i]); return s; };
+  const str = (o, n) => { let s = ''; for (let i = 0; i < n; i++) { const c = u8[o + i]; s += c === 0 ? ' ' : String.fromCharCode(c); } return s; }; // NUL padding (e.g. Motive 'm\0\0\0') -> space so trim() works
 
   // ---------- parameters ----------
   const groups = {}, gid = {};
@@ -483,7 +482,7 @@ function parseC3D(buf) {
         analog[c][f * anaSPF + s] = (rdA(q) - chO[c]) * chS[c];
   }
 
-  // ---------- force platforms ----------
+  // ---------- force plates ----------
   const plates = [];
   const nFP = P1('FORCE_PLATFORM', 'USED', 0) || 0;
   const types = P('FORCE_PLATFORM', 'TYPE', []), corners = P('FORCE_PLATFORM', 'CORNERS', []);
@@ -554,6 +553,14 @@ function parseC3D(buf) {
   const ys = String(P1('POINT', 'Y_SCREEN', '+Z')).toUpperCase();
   const upAxis = ys.includes('Y') ? 'Y' : ys.includes('X') ? 'X' : 'Z';
 
+  // GRF sign guard: the viewer shows reaction = -F, which must point up (positive vertical).
+  const ui = 'XYZ'.indexOf(upAxis);
+  for (const p of plates) {
+    let sum = 0; for (let i = ui; i < p.F.length; i += 3) sum += p.F[i];
+    p.flipped = sum > 0;
+    if (p.flipped) for (let i = 0; i < p.F.length; i++) p.F[i] = -p.F[i];
+  }
+
   return {
     pointRate, frames, labels, units, pos,
     analogRate: anaSPF * pointRate, anaSPF, analogLabels: anaLabels, analogUnits: anaUnits, analog,
@@ -585,12 +592,12 @@ let D = null, N = 0, M = 0, P3 = null;
 let grp = [], valid = [], links = [], sel = new Set(), lastClicked = null, hoverJ = null;
 let frame = 0, playing = false, speed = 1, clockT = 0, filter = 'all', query = '';
 let linkMode = false, pendingA = null, fileName = '';
-let opts = { mk: 18, bone: 8, grf: 20, trail: 5, layers: { markers: true, bones: true, grf: true, cop: false, plates: true, trails: true, trailsFull: false, unassigned: true, floor: true } };
+let opts = { mk: 18, bone: 8, grf: 20, trail: 5, layers: { markers: true, bones: true, grf: true, butterfly: false, bflyLine: false, plates: true, trails: true, trailsFull: false, unassigned: true, floor: true } };
 let plateFrames = [];
 let SIG = [];                  // available signals for graphs
 let charts = [];               // [{sid, el, cv, val}]
 let emgMode = 'raw', hoverT = null;
-let jcs = [], jcOn = false, jcMap = {}, eff = [];   // joint centres; eff = links after JC remap [{a,b,src:[raw link idx]}]
+let jcs = [], jcOn = false, jcMap = {}, eff = [], jcSel = new Set();   // jcSel: joint centres picked in 3D / chips → their own trajectory   // joint centres; eff = links after JC remap [{a,b,src:[raw link idx]}]
 let sensorNames = {};                              // raw analog label -> user name (kept while the page is open)
 let viewKind = '34', viewFlip = false, antSel = 'auto', autoAnt = { axis: 'X', sign: 1 };
 
@@ -607,6 +614,7 @@ function loadBuffer(buf, name, sample) {
   try { d = parseC3D(buf); }
   catch (e) { console.error(e); toast('Could not read this C3D. The file may be corrupted or in an unsupported format.'); return; }
   if (!d.labels.length || !d.frames) { toast('This file has no 3D marker data.'); return; }
+  const flippedFP = d.plates.map((p, k) => p.flipped ? 'FP' + (k + 1) : null).filter(Boolean);
   resetForNewFile();
   D = d; N = d.frames; M = d.labels.length; fileName = name;
 
@@ -646,6 +654,7 @@ function loadBuffer(buf, name, sample) {
     buildSignals(); defaultCharts(); renderMeta();
     buildScene(); renderAll();
     setView('34', true); setFrame(0);
+    if (flippedFP.length) toast(`GRF sign corrected to positive: ${flippedFP.join(', ')}`);
   } catch (e) { console.error(e); toast('Loaded the file, but part of it could not be displayed.'); }
 }
 /* everything that belongs to the previous file is cleared before a new one is built
@@ -656,7 +665,7 @@ function resetForNewFile() {
   linkMode = false; pendingA = null; stage.classList.remove('linking');
   $('btn-link2').setAttribute('aria-pressed', false); $('hint').hidden = true; $('tip').hidden = true;
   comOn = false; comSel = false; comData = null; $('btn-com').setAttribute('aria-pressed', false); $('lg-com').hidden = true;
-  CAN = null; links = []; eff = []; jcs = []; jcOn = false; jcMap = {}; dropSet = new Set(); usedRaw = new Set();
+  CAN = null; links = []; eff = []; jcs = []; jcSel.clear(); jcOn = false; jcMap = {}; dropSet = new Set(); usedRaw = new Set();
   filter = 'all'; query = ''; $('search').value = '';
   viewKind = '34'; viewFlip = false; antSel = 'auto'; gizmoKey = '';
   charts = []; SIG = []; trailFrame = -1;
@@ -703,7 +712,7 @@ function assign(g) {
 }
 $('btn-clearall').onclick = () => {
   if (!D) return;
-  grp = D.labels.map((l, j) => valid[j] === 0 ? 'H' : 'U'); sel.clear();
+  grp = D.labels.map((l, j) => valid[j] === 0 ? 'H' : 'U'); sel.clear(); jcSel.clear();
   renderAll(); refreshColors(); toast('Cleared all group assignments.');
 };
 const TRUNK_RE = /head|hd$|fhd|bhd|nose|neck|c7|clav|strn|stern|xiph|thorac|lumbar|spine|sacr|asis|psis|\basi\b|^[rl]?asi$|^[rl]?psi$|^[rl]?[._]?(ias|ips)$|^[rl]?ic$|\bic\b|iliac|pelvi|waist|[fb]wt$|bac$|back$|chest|^t\d{1,2}$|[._]t\d{1,2}$|^l[1-5]$|trans$/i;
@@ -721,21 +730,17 @@ function baseLabel(l) {
 function labelPrefix(l) { const s = String(l), k = s.lastIndexOf(':'); return k > 0 ? s.slice(0, k) : ''; }
 function sideOf(raw) {
   const l = baseLabel(raw);
-  if (/^right/i.test(l) || /^(우|오른)/.test(l)) return 'R';                       // RightKnee, Right_Knee, 우측무릎
+  if (/^right/i.test(l) || /^(우|오른)/.test(l)) return 'R';
   if (/^left/i.test(l) || /^(좌|왼)/.test(l)) return 'L';
-  if (/^(R|Rt|r|rt)([._\s-]|(?=[A-Z0-9]))/.test(l)) return 'R';                  // R.Knee, R_Knee, RKNE, RtKnee, r_knee
+  if (/^(R|Rt|r|rt)([._\s-]|(?=[A-Z0-9]))/.test(l)) return 'R'; 
   if (/^(L|Lt|l|lt)([._\s-]|(?=[A-Z0-9]))/.test(l)) return 'L';
-  if (/[._\s-](r|rt|right)$/i.test(l) || /[a-z](R|Rt|Right)$/.test(l)) return 'R';  // Knee_R, Knee.Right, KneeR, KneeRight
+  if (/[._\s-](r|rt|right)$/i.test(l) || /[a-z](R|Rt|Right)$/.test(l)) return 'R';
   if (/[._\s-](l|lt|left)$/i.test(l) || /[a-z](L|Lt|Left)$/.test(l)) return 'L';
-  if (/[._\s-](R|Rt|Right)[._\s-]/.test(l) || /[a-z]Right(?=[A-Z0-9])/.test(l)) return 'R';   // Knee_R_Lat, KneeRightLat
+  if (/[._\s-](R|Rt|Right)[._\s-]/.test(l) || /[a-z]Right(?=[A-Z0-9])/.test(l)) return 'R'; 
   if (/[._\s-](L|Lt|Left)[._\s-]/.test(l) || /[a-z]Left(?=[A-Z0-9])/.test(l)) return 'L';
   return null;
 }
-/* ============ landmark recognition (name-agnostic) ============
- * Every label is reduced to a side (R / L / none) and a canonical landmark key, whatever the marker set calls it:
- * "RKNE", "R.Knee", "r_knee_study", "RightKnee", "Knee_R", "right_knee", "우측무릎" → R · KNE;
- * "RMED", "r_mankle", "R.Ankle.Medial", "RMMAL" → R · MED; "r_sh1", "RTB1", "R.Shank.Upper" → R · TIB (cluster).
- * Auto-link, joint centres and the COM model all read these keys, so a new naming scheme only needs a rule here. */
+/* ============ landmark recognition (name-agnostic) ============ */
 const SPINE_RAW = /^(T\d{1,2}|L[1-5]|S[12]|C[1-6])$/i;
 function stripSide(b) {
   const pats = [/^(right|left)[._\s-]*/i, /^(우측|좌측|오른쪽|왼쪽|오른|왼|우|좌)[._\s-]*/, /^(R|Rt|r|rt|L|Lt|l|lt)(?:[._\s-]+|(?=[A-Z0-9]))/,
@@ -799,6 +804,7 @@ function canonList(side, ...keys) {   // side: 'R' | 'L' | null (unsided only) |
   return out.length ? out : null;
 }
 function meanHeight(j) { let s = 0, n = 0; for (let f = 0; f < N; f += 3) { const y = P3[(f * M + j) * 3 + 1]; if (Number.isFinite(y)) { s += y; n++; } } return n ? s / n : 0; }
+
 /* generic stick figure from landmark keys — used when no named marker-set template fits the file */
 function genericLinks() {
   const K = {};
@@ -969,12 +975,13 @@ function pickMarker(j, shift, toggle, order) {
     const a = order.indexOf(lastClicked), b = order.indexOf(j);
     if (a >= 0 && b >= 0) { const [lo, hi] = a < b ? [a, b] : [b, a]; for (let i = lo; i <= hi; i++) sel.add(order[i]); } else sel.add(j);
   } else if (toggle || shift) { sel.has(j) ? sel.delete(j) : sel.add(j); }
-  else { comSel = false; if (sel.size === 1 && sel.has(j)) sel.clear(); else { sel.clear(); sel.add(j); } }
+  else { comSel = false; jcSel.clear(); if (sel.size === 1 && sel.has(j)) sel.clear(); else { sel.clear(); sel.add(j); } }
   lastClicked = j; renderSel();
 }
 function renderSel() {
   $('list').querySelectorAll('.mk').forEach(b => b.setAttribute('aria-pressed', sel.has(+b.dataset.j)));
-  const nSel = sel.size + (comSel ? 1 : 0);
+  const nSel = sel.size + (comSel ? 1 : 0) + jcSel.size;
+  $('jclist').querySelectorAll('.chip').forEach((ch, k) => ch.classList.toggle('on', jcSel.has(k)));
   $('selinfo').textContent = D ? (nSel ? `${nSel} selected` : '') : '';
   ORDER.forEach(g => $('as-' + g).disabled = !sel.size);
   refreshHalos(); rebuildTrails(); updateScene();
@@ -1102,10 +1109,10 @@ function computeEff() {
     for (const s of ['R', 'L']) {
       const kj = jointIdx(s, 'knee'), aj = jointIdx(s, 'ankle');
       if (hj[s] != null) {
-        const c = jcs[hj[s] - M]; synth.push([hj[s], s === 'R' ? c.m.ra : c.m.la]);      // hip JC hangs from the ipsilateral ASIS
-        if (kj != null) { synth.push([hj[s], kj]); markTracking(s, THIGH_RE, 'THI'); }           // thigh = HJC → knee
+        const c = jcs[hj[s] - M]; synth.push([hj[s], s === 'R' ? c.m.ra : c.m.la]);  
+        if (kj != null) { synth.push([hj[s], kj]); markTracking(s, THIGH_RE, 'THI'); } 
       }
-      if (kj != null && aj != null && (kj >= M || aj >= M)) { synth.push([kj, aj]); markTracking(s, SHANK_RE, 'TIB'); }   // shank = knee → ankle
+      if (kj != null && aj != null && (kj >= M || aj >= M)) { synth.push([kj, aj]); markTracking(s, SHANK_RE, 'TIB'); } 
     }
     if (hj.R != null && hj.L != null) synth.push([hj.R, hj.L]);
   }
@@ -1116,8 +1123,7 @@ function computeEff() {
     if (seen.has(key)) { const e = eff[seen.get(key)]; if (src != null) e.src.push(src); if (force) e.force = force; return; }
     seen.set(key, eff.length); eff.push({ a: A, b: B, src: src == null ? [] : [src], auto: src == null, force });
   };
-  // the foot keeps its real shape: links from a JC member (e.g. malleoli) to foot markers stay on the raw markers,
-  // and that joint's own lateral–medial bar is kept so the JC sits on it
+
   const isFoot = j => j < M && (FOOT_RE.test(baseLabel(D.labels[j])) || /^(HEE|TOE|MT1|MT2|MT5|MIDF)$/.test(canonOf(j).key));
   const footMember = new Set();
   links.forEach(([a, b]) => { if (jcMap[a] != null && isFoot(b)) footMember.add(a); if (jcMap[b] != null && isFoot(a)) footMember.add(b); });
@@ -1128,7 +1134,7 @@ function computeEff() {
     addE(keepA ? a : (jcMap[a] ?? a), keepB ? b : (jcMap[b] ?? b), i);
   });
   synth.forEach(([a, b, g]) => addE(a, b, null, g));
-  // markers still drawn by a stick stay visible even if they are JC members
+
   usedRaw = new Set(); eff.forEach(e => { if (e.a < M) usedRaw.add(e.a); if (e.b < M) usedRaw.add(e.b); });
 }
 function commonName(a, b) {
@@ -1136,19 +1142,22 @@ function commonName(a, b) {
   const p = x.slice(0, i).replace(/[._\s-]+$/, '');
   return (p.length >= 2 ? p : `${x}/${y}`) + ' JC';
 }
+/* pick a joint centre itself (not the markers it is built from); additive = shift / ⌘ / ctrl */
+function selectJC(k, additive) {
+  if (additive) { jcSel.has(k) ? jcSel.delete(k) : jcSel.add(k); }
+  else if (jcSel.size === 1 && jcSel.has(k) && !sel.size && !comSel) jcSel.clear();
+  else { sel.clear(); comSel = false; jcSel.clear(); jcSel.add(k); }
+  renderSel();
+}
 function renderJC() {
   $('jcstat').textContent = jcs.length;
   $('btn-jc').setAttribute('aria-pressed', jcOn);
   $('jclist').innerHTML = jcs.map((c, k) => `<span class="chip" style="--g:${GROUPS[grpOf(M + k)].c}" title="${jcSrc(c)}${jcMembers(c).map(j => esc(D.labels[j])).join(' + ')}"><i></i><span>${esc(c.name)}</span><button data-k="${k}" aria-label="Remove ${esc(c.name)}">×</button></span>`).join('');
-  $('jclist').querySelectorAll('button').forEach(b => b.onclick = () => { jcs.splice(+b.dataset.k, 1); afterJCChange(); });
+  $('jclist').querySelectorAll('button').forEach(b => b.onclick = e => { e.stopPropagation(); jcs.splice(+b.dataset.k, 1); afterJCChange(); });
+  $('jclist').querySelectorAll('.chip').forEach((ch, k) => { ch.classList.toggle('on', jcSel.has(k)); ch.onclick = e => selectJC(k, e.shiftKey || e.metaKey || e.ctrlKey); });
 }
 /* ============ whole-body centre of mass ============
- * Segmental method with de Leva (1996) adjusted Zatsiorsky–Seluyanov parameters (adult male):
- * mass fraction, CM position from the proximal end. Head VERT→CERV 50.02 % (else centroid of head markers),
- * trunk CERV→mid-hip 51.38 % (C7/T1, else mid-acromion; SUPR→mid-hip 44.86 % if only a jugular-notch marker), upper arm SJC→EJC 57.72 %,
- * forearm EJC→WJC 45.74 %, hand WJC→MET3 79.00 %, thigh HJC→KJC 40.95 %, shank KJC→AJC 43.95 %, foot HEEL→TTIP 44.15 %.
- * Hip = Harrington (2007) HJC; knee / ankle / elbow = medial–lateral JC when available. Segments missing in a frame
- * are left out and the rest renormalised; a frame with < 70 % of body mass available has no COM. */
+ * Segmental method with de Leva (1996) adjusted Zatsiorsky–Seluyanov parameters (adult male) */
 const COM_COLOR = '#FFB000';
 let comOn = false, comSel = false, comData = null, comMsg = '', comNSeg = 0;   // comSel: COM picked in 3D → its trajectory is drawn
 const _cv = new THREE.Vector3(), _h1 = new THREE.Vector3(), _h2 = new THREE.Vector3(), _A = new THREE.Vector3(), _B = new THREE.Vector3(), _P = new THREE.Vector3();
@@ -1180,7 +1189,7 @@ function comModel() {
   const sh = { R: lmAvg(firstOf(findMk('R', /sho(?!e)|shoulder|acr/i), canonList('R', 'SHO'))), L: lmAvg(firstOf(findMk('L', /sho(?!e)|shoulder|acr/i), canonList('L', 'SHO'))) };
   const cerv = lmAvg(firstOf(findMk('any', /^c7$|cerv/i), findMk('any', /^t1$/i), canonList(null, 'C7'), canonList(null, 'NECK')));
   const supr = lmAvg(firstOf(findMk('any', /^clav$|jugul|suprast|^ij$/i), canonList(null, 'CLAV')));
-  // trunk proximal end: C7/T1 → mid-acromion (≈ CERV level; tested ~1 cm error) → jugular notch (SUPR line runs anterior to the trunk, ~3 cm bias)
+
   let prox = null;
   if (cerv) { prox = cerv; add(.4346, cerv, midH, .5138); }
   else if (sh.R && sh.L) { prox = mid2(sh.R, sh.L); add(.4346, prox, midH, .5138); }
@@ -1189,14 +1198,14 @@ function comModel() {
   const vert = lmAvg(firstOf(findMk('any', /top.?head|vertex|^vert/i), canonList('any', 'HEADT'))), headMk = lmAvg(firstOf(findMk('any', /head|hd$|fhd|bhd/i, /neck/i), canonList('any', 'HEADF', 'HEADB', 'HEADT', 'HEAD', 'NOSE', 'EYE', 'EAR')));
   if (vert && cerv) add(.0694, vert, cerv, .5002);
   else if (headMk) addP(.0694, headMk);
-  else add(.0694, prox, midH, -0.201);   // no head markers: head CM ≈ 20 % of trunk length above the trunk's top (de Leva lengths 121 / 603 mm)
+  else add(.0694, prox, midH, -0.201); 
   let legs = 0;
   for (const s of ['R', 'L']) {
     const el = lmAvg(firstOf(jcLike(s, /elb|elbow|epic|lel|mel/i), findMk(s, /elb|elbow|lel|epic|lep/i, /med|mel|mep/i), findMk(s, /elb|elbow|epic/i), canonList(s, 'ELB', 'ELBM')));
     const wr = lmAvg(firstOf(jcLike(s, /wr|wrist|styl/i), findMk(s, /wr[ab]?$|wrist|wr[ab]|rsp|usp|styl/i), canonList(s, 'WRA', 'WRB')));
     const hand = lmAvg(firstOf(findMk(s, /fin|hand|mcp|knuck/i), canonList(s, 'FIN')));
     add(.0271, sh[s], el, .5772); add(.0162, el, wr, .4574);
-    if (hand) add(.0061, wr, hand, .79); else add(.0061, el, wr, 1.24);   // no hand marker: hand CM ≈ 24 % of forearm length beyond the wrist
+    if (hand) add(.0061, wr, hand, .79); else add(.0061, el, wr, 1.24);
     const kn = lmAvg(firstOf(jcLike(s, /kne|knee|fc$|fe$|kjc/i), findMk(s, /kne|knee|lfc|lfe|lep/i, /med|knm|mfc|mfe|thi|thigh|shank|tib/i), findMk(s, /kne|knee|fc$/i, /thi|thigh|shank|tib/i), canonList(s, 'KNE'), canonList(s, 'KNM')));
     const an = lmAvg(firstOf(jcLike(s, /ank|mal/i), findMk(s, /ank|ankle|lmal|lml/i, /med|mmal|mml/i), findMk(s, /ank|ankle|mal/i), canonList(s, 'ANK'), canonList(s, 'MED')));
     const heel = lmAvg(firstOf(findMk(s, /hee|heel|calc|^.?cal$/i), canonList(s, 'HEE'))), toe = lmAvg(firstOf(findMk(s, /toe|ttip|mt\d|mth|met\d|hallux|fm\d/i), canonList(s, 'TOE', 'MT2', 'MT1', 'MT5')));
@@ -1261,9 +1270,10 @@ $('btn-com').onclick = () => {
 function afterJCChange() {
   // sticks may still point at a JC index that no longer exists → drop them before anything is recoloured / positioned
   if (!jcs.length) jcOn = false;
+  jcSel.clear();   // indices may have shifted
   if (boneGroup) { boneGroup.clear(); bones = []; }
   rebuildJCMeshes(); rebuildBones(); renderJC();
-  computeCOM(); refreshComSignals(); rebuildTrails(); updateScene(); drawCharts();
+  computeCOM(); refreshComSignals(); renderSel(); drawCharts();   // renderSel also refreshes trails + the selection count
 }
 $('btn-jcreset').onclick = () => {
   if (!D) return;
@@ -1290,6 +1300,58 @@ const stage = $('stage');
 let renderer, scene, camera, perspCam, orthoCam, controls, ray, mouse, floorObjs = [];
 const PLATE_RISE = 0.01;   // visible thickness of the plate above the floor (m)
 let markerMeshes = [], halos = [], bones = [], boneMat = {}, grfObjs = [], plateGroup, trailGroup, markerGroup, boneGroup, grfGroup;
+const BFLY_MAX_COLOR = 0xff3b30; 
+const BFLY_R = 0.0028;             // butterfly vector radius (m); the current frame is drawn a bit thicker
+const BFLY_ENV_R = 0.0042;         // tip line core radius (m), ~1.5× the vectors
+const BFLY_GLOW = { r: 0.011, b: 0.22 };   // soft halo around the tip line: radius (m) and relative brightness
+
+const BFLY_FADE = { floor: 0.28, top: 0.75, tau: 0.6 };
+const bflyB = (age, top = BFLY_FADE.top) => BFLY_FADE.floor + (top - BFLY_FADE.floor) * Math.exp(-age / BFLY_FADE.tau);
+const BFLY_LINES = 56;             // butterfly: about this many vectors per plate, however long the contact or high the rate
+const BFLY_NOISE = 0.10;           // plates peaking below 10% of the trial's largest GRF peak are ignored in 3D
+const BFLY_MIN_N = 20;             // a plate counts as loaded only when the vertical GRF exceeds this (N)
+const loaded = (p, f) => !p.noise && Number.isFinite(p.COP[f * 3]) && p.F[f * 3 + 1] > BFLY_MIN_N;   // F is in three.js axes, y = up
+const BFLY_GEO = {
+  shaft: new THREE.CylinderGeometry(1, 1, 1, 8, 1, true).translate(0, .5, 0), 
+  head: new THREE.ConeGeometry(1, 1, 16, 1).translate(0, .5, 0),
+  envSeg: new THREE.CylinderGeometry(1, 1, 1, 12, 1, false).translate(0, .5, 0), 
+};
+function bflyLabelTex(n) {
+  const c = document.createElement('canvas'), x = c.getContext('2d'), t = `${Math.round(n)} N`;
+  c.width = 256; c.height = 72;
+  x.font = '600 40px ui-monospace, SFMono-Regular, Menlo, monospace'; x.textBaseline = 'middle';
+  const w = Math.min(248, x.measureText(t).width + 28);
+  x.fillStyle = 'rgba(12,16,22,.82)'; x.beginPath(); x.roundRect ? x.roundRect(4, 8, w, 56, 10) : x.rect(4, 8, w, 56); x.fill();
+  x.strokeStyle = '#ff3b30'; x.lineWidth = 3; x.stroke();
+  x.fillStyle = '#ff6a60'; x.fillText(t, 18, 37);
+  const tex = new THREE.CanvasTexture(c); tex.userData = { w: c.width, h: c.height }; return tex;
+}
+class PolyCurve extends THREE.Curve {
+  constructor(pts) { super(); this.pts = pts; }
+  getPoint(t, out = new THREE.Vector3()) { const n = this.pts.length - 1, x = t * n, i = Math.min(n - 1, Math.floor(x)); return out.copy(this.pts[i]).lerp(this.pts[i + 1], x - i); }
+}
+/* one seamless tube per contact; cols[i] = brightness of ring i */
+function bflyTube(pts, r, cols, gc, k) {
+  const radial = 10, geo = new THREE.TubeGeometry(new PolyCurve(pts), pts.length - 1, r, radial, false);
+  const c = new Float32Array(geo.attributes.position.count * 3);
+  for (let i = 0; i < pts.length; i++) for (let j = 0; j <= radial; j++) { const q = (i * (radial + 1) + j) * 3, b = cols[i] * k; c[q] = gc.r * b; c[q + 1] = gc.g * b; c[q + 2] = gc.b * b; }
+  geo.setAttribute('color', new THREE.BufferAttribute(c, 3)); return geo;
+}
+const BFLY_LINE_MAT = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
+const _bq = new THREE.Quaternion(), _bm = new THREE.Matrix4(), _bs = new THREE.Vector3(), _bp = new THREE.Vector3(), _bd = new THREE.Vector3(), _bc = new THREE.Color();
+/* keeps the max-GRF labels a constant size on screen (called every animation frame) */
+function bflyLabels() {
+  for (const o of grfObjs) {
+    if (!o.label || !o.label.visible) continue;
+    const tip = o.label.userData.tip;
+    const h = camera.isOrthographicCamera ? (camera.top - camera.bottom) / camera.zoom
+      : 2 * camera.position.distanceTo(tip) * Math.tan(camera.fov * Math.PI / 360) / camera.zoom;
+    const sh = h * 0.034, a = 256 / 72;
+    o.label.scale.set(sh * a, sh, 1);
+    o.label.center.set(0.02, -0.25); 
+    o.label.position.copy(tip);
+  }
+}
 const UP = new THREE.Vector3(0, 1, 0), vA = new THREE.Vector3(), vB = new THREE.Vector3();
 const sphereGeo = new THREE.SphereGeometry(1, 20, 14);
 const cylGeo = new THREE.CylinderGeometry(1, 1, 1, 14, 1).translate(0, 0.5, 0);
@@ -1366,18 +1428,38 @@ function buildScene() {
     block.castShadow = true; block.receiveShadow = true; plateGroup.add(block);
     p.top = y0 + PLATE_RISE;
   });
-  grfObjs = plateFrames.map(() => {
+  // frame of the largest resultant GRF on each plate (only plates that were actually loaded)
+  plateFrames.forEach(p => {
+    p.noise = false;   // re-evaluated below on every scene build
+    let best = -1, bm = 0, nl = 0;
+    for (let f = 0; f < N; f++) { const q = f * 3; if (!loaded(p, f)) continue; nl++; const m = Math.hypot(p.F[q], p.F[q + 1], p.F[q + 2]); if (m > bm) { bm = m; best = f; } }
+    p.maxFrame = best; p.maxN = bm; p.bflyStep = Math.max(1, Math.ceil(nl / BFLY_LINES));
+  });
+  // a plate whose peak stays under BFLY_NOISE × the trial's largest peak is treated as noise (edge touch, offset): no arrow, fan or max
+  const peak = Math.max(0, ...plateFrames.map(p => p.maxN));
+  plateFrames.forEach(p => { p.noise = p.maxN < peak * BFLY_NOISE; if (p.noise) p.maxFrame = -1; });
+  grfObjs = plateFrames.map(p => {
     const mat = new THREE.MeshStandardMaterial({ color: C.grf, emissive: C.grf, emissiveIntensity: .55, roughness: .3, metalness: .1 });
     const g = new THREE.Group();
     const shaft = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 1, 16, 1).translate(0, .5, 0), mat);
     const head = new THREE.Mesh(new THREE.ConeGeometry(1, 1, 24, 1).translate(0, .5, 0), mat);
     const base = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 10), mat);
     shaft.castShadow = head.castShadow = true; g.add(shaft, head, base);
-    const cop = new THREE.Mesh(new THREE.RingGeometry(.016, .026, 32).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: C.grf, transparent: true, opacity: .9, side: THREE.DoubleSide }));
-    const tg = new THREE.BufferGeometry(); tg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(N * 3), 3));
-    const trail = new THREE.Line(tg, new THREE.LineBasicMaterial({ color: C.grf, transparent: true, opacity: .55 }));
-    grfGroup.add(g, cop, trail);
-    return { g, shaft, head, base, cop, trail };
+    // Butterfly (Pedotti) diagram: GRF vectors drawn from the CoP, accumulated up to the current frame.
+    // Thin cylinders with additive blending: each vector is faint, overlaps glow, older vectors fade.
+    const fan = new THREE.InstancedMesh(BFLY_GEO.shaft, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }), BFLY_LINES + 4);
+    fan.instanceMatrix.setUsage(THREE.DynamicDrawUsage); fan.frustumCulled = false;
+    fan.setColorAt(0, new THREE.Color());   // allocates the colour buffer at full capacity — must run before count is lowered
+    fan.instanceColor.setUsage(THREE.DynamicDrawUsage); fan.count = 0;
+    const maxMat = new THREE.MeshBasicMaterial({ color: BFLY_MAX_COLOR, transparent: true, opacity: 1, depthTest: false });   // always on top of fan + tip line
+    const max = new THREE.Group(), maxShaft = new THREE.Mesh(BFLY_GEO.shaft, maxMat), maxHead = new THREE.Mesh(BFLY_GEO.head, maxMat);
+    max.add(maxShaft, maxHead); maxShaft.renderOrder = maxHead.renderOrder = 10;
+    const label = new THREE.Sprite(new THREE.SpriteMaterial({ map: bflyLabelTex(p.maxN), transparent: true, depthTest: false }));
+    label.renderOrder = 11; label.visible = max.visible = false;
+    // tip line: the vector tips joined frame by frame, drawn over the fan like a line graph
+    const env = new THREE.Group(); env.renderOrder = 5;   // tip line: rebuilt as seamless glowing tubes on every update
+    grfGroup.add(g, fan, env, max, label);
+    return { g, shaft, head, base, fan, env, max, maxShaft, maxHead, label };
   });
   comGroup = new THREE.Group();
   const cc = new THREE.Color(COM_COLOR);
@@ -1442,6 +1524,12 @@ function rebuildTrails() {
   const f0 = full ? 0 : Math.max(0, frame - TRAIL_HALF), f1 = full ? N - 1 : Math.min(N - 1, frame + TRAIL_HALF);
   const series = [...sel].slice(0, 16).map(j => ({ arr: P3, stride: M, off: j, col: grp[j] === 'U' ? 0x9aa3b2 : GROUPS[grp[j]].c }));
   if (comOn && comData && comSel) series.push({ arr: comData, stride: 1, off: 0, col: COM_COLOR });
+  for (const k of jcSel) {   // a joint centre's path is computed on the fly from its source markers
+    if (!jcs[k]) continue;
+    const arr = new Float32Array(N * 3), v = new THREE.Vector3();
+    for (let f = f0; f <= f1; f++) { posIdx(M + k, f, v); arr[f * 3] = v.x; arr[f * 3 + 1] = v.y; arr[f * 3 + 2] = v.z; }   // only the drawn window
+    const g = grpOf(M + k); series.push({ arr, stride: 1, off: 0, col: g === 'U' || !GROUPS[g] ? 0x9aa3b2 : GROUPS[g].c });
+  }
   series.forEach(({ arr, stride, off, col: c0 }) => {
     const col = new THREE.Color(c0);
     const mat = new THREE.MeshStandardMaterial({ color: col, emissive: col, emissiveIntensity: .35, roughness: .5, transparent: true, opacity: .6, depthWrite: false });
@@ -1469,7 +1557,7 @@ function setHover(j) { if (hoverJ === j) return; hoverJ = j; if (markerMeshes.le
 
 function updateScene() {
   if (!D || !markerMeshes.length) return;
-  if (opts.layers.trails && !opts.layers.trailsFull && trailFrame !== frame && (sel.size || (comOn && comData && comSel))) rebuildTrails();
+  if (opts.layers.trails && !opts.layers.trailsFull && trailFrame !== frame && (sel.size || jcSel.size || (comOn && comData && comSel))) rebuildTrails();
   const r = opts.mk / 1000, hideSrc = jcOn;
   markerMeshes.forEach((m, j) => {
     const b = (frame * M + j) * 3, g = grp[j];
@@ -1482,7 +1570,7 @@ function updateScene() {
   jcMeshes.forEach((m, k) => {
     const g = grpOf(M + k); posIdx(M + k, frame, vA);
     m.visible = jcOn && opts.layers.markers && Number.isFinite(vA.x) && g !== 'H' && (g !== 'U' || opts.layers.unassigned);
-    if (m.visible) { m.position.copy(vA); m.scale.setScalar(r * 1.3); }
+    if (m.visible) { const on = jcSel.has(k); m.position.copy(vA); m.scale.setScalar(r * (on ? 1.7 : 1.3)); m.material.emissiveIntensity = on ? 1.15 : .7; }
   });
   if (comGroup) {
     const i = frame * 3, ok = comOn && comData && Number.isFinite(comData[i]);
@@ -1508,8 +1596,8 @@ function updateScene() {
   plateFrames.forEach((p, k) => {
     const o = grfObjs[k], i = frame * 3;
     const F = new THREE.Vector3(p.F[i], p.F[i + 1], p.F[i + 2]), mag = F.length();
-    const has = Number.isFinite(p.COP[i]) && mag > 20;
-    o.g.visible = has && opts.layers.grf; o.cop.visible = has && opts.layers.cop; o.trail.visible = opts.layers.cop;
+    const has = loaded(p, frame);
+    o.g.visible = has && opts.layers.grf;
     if (has) {
       const base = new THREE.Vector3(p.COP[i], Math.max(p.COP[i + 1], p.top ?? 0) + 0.001, p.COP[i + 2]);
       const L = mag * sc, headL = Math.min(0.11, L * 0.35), headR = headL * 0.36, shaftR = Math.max(0.006, headR * 0.34);
@@ -1517,11 +1605,49 @@ function updateScene() {
       o.shaft.scale.set(shaftR, Math.max(1e-4, L - headL), shaftR);
       o.head.position.y = L - headL; o.head.scale.set(headR, headL, headR);
       o.base.scale.setScalar(shaftR * 1.6);
-      o.cop.position.set(base.x, base.y + 0.001, base.z);
     }
-    const pos = o.trail.geometry.attributes.position; let n = 0;
-    for (let f = 0; f <= frame; f++) { const q = f * 3; if (!Number.isFinite(p.COP[q])) continue; pos.setXYZ(n++, p.COP[q], Math.max(p.COP[q + 1], p.top ?? 0) + 0.002, p.COP[q + 2]); }
-    pos.needsUpdate = true; o.trail.geometry.setDrawRange(0, n);
+    // butterfly: every step-th loaded frame up to now (~BFLY_LINES vectors per plate), oldest faint → newest bright
+    const bf = opts.layers.butterfly, step = p.bflyStep || 1;
+    o.fan.visible = bf; o.env.visible = bf && opts.layers.bflyLine;
+    const showMax = bf && p.maxFrame >= 0 && frame >= p.maxFrame;
+    o.max.visible = o.label.visible = showMax;
+    if (!bf) return;
+    const base = f => { const q = f * 3; return _bp.set(p.COP[q], Math.max(p.COP[q + 1], p.top ?? 0) + 0.001, p.COP[q + 2]); };
+    const vec = f => { const q = f * 3; return _bd.set(p.F[q], p.F[q + 1], p.F[q + 2]); };
+    const fs = [];
+    for (let f = 0, k = 0; f <= frame; f++) { if (!loaded(p, f)) continue; if (k++ % step === 0 && f !== frame && f !== p.maxFrame) fs.push(f); }
+    if (has && frame !== p.maxFrame) fs.push(frame);
+    const gc = new THREE.Color(C.grf), rate = D.pointRate || 100;
+    fs.forEach((f, n) => {
+      const cur = f === frame, v = vec(f), L = v.length() * sc, r = cur ? BFLY_R * 1.7 : BFLY_R;
+      _bq.setFromUnitVectors(UP, v.normalize());
+      _bm.compose(base(f), _bq, _bs.set(r, Math.max(1e-4, L), r)); o.fan.setMatrixAt(n, _bm);
+      const b = cur ? 1 : bflyB((frame - f) / rate);
+      o.fan.setColorAt(n, _bc.copy(gc).multiplyScalar(b));
+    });
+    o.fan.count = fs.length; o.fan.instanceMatrix.needsUpdate = true; if (o.fan.instanceColor) o.fan.instanceColor.needsUpdate = true;
+    // tip line: every loaded frame (not thinned), one seamless tube per contact (breaks when the foot is off the plate);
+    // bright core + soft additive halo, same time-based fade as the vectors, full brightness at the current frame.
+    o.env.children.forEach(m => m.geometry.dispose()); o.env.clear();
+    if (opts.layers.bflyLine) {
+      const tip = f => { const q = f * 3, y = Math.max(p.COP[q + 1], p.top ?? 0) + 0.001; return new THREE.Vector3(p.COP[q] + p.F[q] * sc, y + p.F[q + 1] * sc, p.COP[q + 2] + p.F[q + 2] * sc); };
+      const flush = run => {
+        if (run.length < 2) return;
+        const pts = run.map(tip), cols = run.map(f => bflyB((frame - f) / rate, 1));
+        const glow = new THREE.Mesh(bflyTube(pts, BFLY_GLOW.r, cols, gc, BFLY_GLOW.b), BFLY_LINE_MAT), core = new THREE.Mesh(bflyTube(pts, BFLY_ENV_R, cols, gc, 1), BFLY_LINE_MAT);
+        glow.renderOrder = 5; core.renderOrder = 6; glow.frustumCulled = core.frustumCulled = false; o.env.add(glow, core);
+      };
+      let run = [];
+      for (let f = 0; f <= frame; f++) { if (loaded(p, f)) run.push(f); else { flush(run); run = []; } }
+      flush(run);
+    }
+    if (showMax) {
+      const v = vec(p.maxFrame), L = v.length() * sc, headL = Math.min(0.07, L * 0.12), headR = headL * 0.34, r = BFLY_R * 2.1;
+      o.max.position.copy(base(p.maxFrame)); o.max.quaternion.setFromUnitVectors(UP, v.normalize());
+      o.maxShaft.scale.set(r, Math.max(1e-4, L - headL), r);
+      o.maxHead.position.y = L - headL; o.maxHead.scale.set(headR, headL, headR);
+      o.label.userData.tip = o.max.localToWorld(new THREE.Vector3(0, L, 0));
+    }
   });
 }
 
@@ -1543,15 +1669,15 @@ function onStageClick(e) {
   if (hit.kind === 'com') {
     if (linkMode) return;
     if (e.shiftKey || e.metaKey || e.ctrlKey) comSel = !comSel;
-    else if (comSel && !sel.size) comSel = false;
-    else { sel.clear(); comSel = true; }
+    else if (comSel && !sel.size && !jcSel.size) comSel = false;
+    else { sel.clear(); jcSel.clear(); comSel = true; }
     renderSel(); return;
   }
   if (hit.kind === 'jc' && linkMode) {
     const c = jcs[hit.k]; if (c.kind === 'hjc') { toast('Hip joint center sticks are linked automatically.'); return; }
     hit.kind = 'marker'; hit.j = c.a;
   }
-  if (hit.kind === 'jc') { sel.clear(); comSel = false; jcMembers(jcs[hit.k]).forEach(j => sel.add(j)); renderSel(); return; }
+  if (hit.kind === 'jc') { selectJC(hit.k, e.shiftKey || e.metaKey || e.ctrlKey); return; }
   if (linkMode) {
     if (hit.kind === 'marker') {
       const j = hit.j;
@@ -1571,7 +1697,7 @@ function onStageClick(e) {
   if (hit.kind === 'marker') {
     pickMarker(hit.j, e.shiftKey, e.metaKey || e.ctrlKey, null);
     const row = $('list').querySelector(`.mk[data-j="${hit.j}"]`); if (row) row.scrollIntoView({ block: 'nearest' });
-  } else if (!e.shiftKey && !e.metaKey && !e.ctrlKey && (sel.size || comSel)) { sel.clear(); comSel = false; renderSel(); }
+  } else if (!e.shiftKey && !e.metaKey && !e.ctrlKey && (sel.size || comSel || jcSel.size)) { sel.clear(); comSel = false; jcSel.clear(); renderSel(); }
 }
 function onStageHover(e) {
   if (!D) return;
@@ -1710,12 +1836,18 @@ function drawGizmo() {
 }
 
 /* layers & sliders */
-const LAYERS = [['markers', 'Markers', C.ink2], ['floor', 'Floor', C.ink2], ['unassigned', 'Un-named', cssv('--none')], ['plates', 'Plates', '#8c96aa'], ['grf', 'GRF', C.grf], ['cop', 'CoP', C.grf],
+const LAYERS = [['markers', 'Markers', C.ink2], ['floor', 'Floor', C.ink2], ['unassigned', 'Un-named', cssv('--none')], ['plates', 'Plates', '#8c96aa'], ['grf', 'GRF', C.grf], ['butterfly', 'Butterfly', C.grf],
                 ['trails', 'Part trajectory', cssv('--right')], ['trailsFull', 'Full trajectory', cssv('--right')]];
 const TRAJ = { trails: 'trailsFull', trailsFull: 'trails' };   // the two trajectory modes are exclusive
 $('layers').innerHTML = LAYERS.map(l => `<button class="tog" id="ly-${l[0]}" data-k="${l[0]}" aria-pressed="${opts.layers[l[0]]}" style="--c:${l[2]}">${l[1]}</button>`).join('');
+$('ly-butterfly').title = 'Click: vectors → vectors + tip line → off';
 $('layers').querySelectorAll('.tog').forEach(b => b.onclick = () => {
-  const k = b.dataset.k; opts.layers[k] = !opts.layers[k]; b.setAttribute('aria-pressed', opts.layers[k]);
+  const k = b.dataset.k;
+  if (k === 'butterfly') {   // 3-state: off → vectors → vectors + tip line → off
+    const L = opts.layers; if (!L.butterfly) L.butterfly = true; else if (!L.bflyLine) L.bflyLine = true; else L.butterfly = L.bflyLine = false;
+    b.setAttribute('aria-pressed', L.butterfly); b.dataset.level = L.bflyLine ? 2 : L.butterfly ? 1 : 0; applyLayers(); return;
+  }
+  opts.layers[k] = !opts.layers[k]; b.setAttribute('aria-pressed', opts.layers[k]);
   if (TRAJ[k]) { if (opts.layers[k]) { opts.layers[TRAJ[k]] = false; $('ly-' + TRAJ[k]).setAttribute('aria-pressed', false); } rebuildTrails(); }
   applyLayers();
 });
@@ -1843,13 +1975,13 @@ function renderCharts() {
   $('gcount').textContent = charts.length;
   requestAnimationFrame(drawCharts);
 }
-const GL = 52, GR = 12;   // plot inset (room for y labels)
-const dur = () => D ? Math.max(1e-3, (N - 1) / D.pointRate) : 1;   // 1-frame files: avoid ÷0 in the graphs
+const GL = 52, GR = 12; 
+const dur = () => D ? Math.max(1e-3, (N - 1) / D.pointRate) : 1; 
 function fmt(v) {
   if (!Number.isFinite(v)) return '–';
   const a = Math.abs(v);
   if (a < 1e-12) return '0';
-  if (a < 0.01) return v.toExponential(1);            // tiny values (e.g. EMG in V) were all printed as 0.000 / -0.000
+  if (a < 0.01) return v.toExponential(1);
   const d = a >= 100 ? 0 : a >= 10 ? 1 : a >= 1 ? 2 : 3;
   const t = v.toFixed(d);
   return /^-0\.?0*$/.test(t) ? t.slice(1) : t;
@@ -2015,7 +2147,7 @@ addEventListener('keydown', e => {
     if (!$('namer').hidden) openNamer(false);
     else if (!$('picker').hidden) openPicker(false);
     else if (linkMode && pendingA != null) { pendingA = null; updateHint(); refreshHalos(); updateScene(); }
-    else if (linkMode) setLinkMode(false); else { sel.clear(); comSel = false; renderSel(); }
+    else if (linkMode) setLinkMode(false); else { sel.clear(); comSel = false; jcSel.clear(); renderSel(); }
   }
   else if ((e.metaKey || e.ctrlKey) && k === 'a') { e.preventDefault(); visibleRows().forEach(j => sel.add(j)); renderSel(); }
   else if (!e.metaKey && !e.ctrlKey && !e.altKey) { const g = Object.keys(GROUPS).find(g => GROUPS[g].key === k); if (g && sel.size) assign(g); }
@@ -2038,7 +2170,7 @@ function loop(ts) {
     controls.update();
     const dist = camera.position.distanceTo(controls.target); scene.fog.near = dist * 0.9; scene.fog.far = dist * 2.6;
     const above = camera.position.y > 0.005; floorObjs.forEach(o => o.visible = above && opts.layers.floor);   // floor toggle; looking from below (I to S) always drops it
-    renderer.render(scene, camera); drawGizmo();
+    bflyLabels(); renderer.render(scene, camera); drawGizmo();
   }
 }
 
